@@ -1,0 +1,84 @@
+body {
+    font-family: 'Press Start 2P', cursive;
+    touch-action: manipulation;
+    overflow-x: hidden; /* Hide horizontal scrollbars */
+    overflow-y: auto; /* Allow vertical scrolling */
+    min-height: 100vh;
+}
+
+canvas {
+    background-color: #0c0c17;
+    display: block;
+    border-radius: 10px;
+    box-shadow: 0 0 20px rgba(125, 211, 252, 0.5);
+    border: 2px solid rgba(125, 211, 252, 0.8);
+    width: 100%;
+    max-width: 100%;
+    height: 500px;
+    max-height: 80vh;
+}
+
+.info-panel {
+    background-color: rgba(0, 0, 0, 0.5);
+    border: 2px solid rgba(125, 211, 252, 0.8);
+}
+
+.power-up-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.25rem; /* 20px */
+}
+
+/* Help button styles */
+#helpButton {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    border: 2px solid rgba(125, 211, 252, 0.8);
+}
+
+#helpButton:hover {
+    transform: scale(1.1);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* Help modal styles */
+#helpModal {
+    backdrop-filter: blur(4px);
+}
+
+#helpModal .text-left {
+    line-height: 1.6;
+}
+
+#helpModal kbd {
+    font-family: 'Press Start 2P', cursive;
+    font-size: 0.7rem;
+}
+
+/* Game container improvements */
+.w-full.max-w-4xl {
+    padding: 0 1rem;
+}
+
+/* Ensure canvas container takes full width */
+canvas {
+    margin: 0 auto;
+    display: block;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    canvas {
+        height: 400px;
+    }
+    
+    .info-panel {
+        flex-direction: column;
+        gap: 1rem;
+        text-align: center;
+    }
+    
+    #powerUpsStatus {
+        justify-content: center;
+    }
+}
