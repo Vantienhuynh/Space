@@ -1,6 +1,25 @@
 document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
+    
+    // Create animated stars background
+    function createStars() {
+        const starsContainer = document.getElementById('stars');
+        const numStars = 100;
+        
+        for (let i = 0; i < numStars; i++) {
+            const star = document.createElement('div');
+            star.className = 'star';
+            star.style.left = Math.random() * 100 + '%';
+            star.style.top = Math.random() * 100 + '%';
+            star.style.width = Math.random() * 3 + 1 + 'px';
+            star.style.height = star.style.width;
+            star.style.animationDelay = Math.random() * 2 + 's';
+            starsContainer.appendChild(star);
+        }
+    }
+    
+    createStars();
     const scoreEl = document.getElementById('scoreEl');
     const powerUpsStatusEl = document.getElementById('powerUpsStatus');
     const enemyCountEl = document.getElementById('enemyCount');
@@ -23,6 +42,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const backToNameButton = document.getElementById('backToNameButton');
     const saveScoreButton = document.getElementById('saveScoreButton');
     const leaderboardList = document.getElementById('leaderboardList');
+    
+    // Upgrade modal elements
+    const upgradeModal = document.getElementById('upgradeModal');
+    const upgradeDamageButton = document.getElementById('upgradeDamage');
+    const upgradePierceButton = document.getElementById('upgradePierce');
+    const upgradeSizeButton = document.getElementById('upgradeSize');
 
     // Firebase configuration
     const firebaseConfig = {
@@ -56,6 +81,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let powerUps = [];
     let orbitingMoons = [];
     let bombs = [];
+    let pinkMonsters = [];
+    let boss = null;
+    let bossSpawned = false;
     let enemyInterval, powerUpInterval, bombInterval;
     let powerUpTimers = {};
     let gameStartTime = Date.now();
@@ -63,6 +91,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let difficultyLevel = 1;
     let lastHitTime = 0;
     const hitCooldown = 1000; // 1 second cooldown between hits
+    
+    // Upgrade system
+    let upgradePoints = 0;
+    let lastUpgradeScore = 0;
+    const UPGRADE_INTERVAL = 30000; // Every 30,000 points
 
     const keys = { w: { pressed: false }, a: { pressed: false }, s: { pressed: false }, d: { pressed: false } };
 
@@ -73,12 +106,32 @@ document.addEventListener('DOMContentLoaded', () => {
             this.isInvincible = false;
             this.ricochetActive = false;
             this.doubleShot = false;
+            // Upgrade stats
+            this.damage = 1;
+            this.pierce = 0; // Number of enemies projectile can pierce through
+            this.projectileSize = 5;
+            this.projectileSpeed = 7;
         }
         draw() {
+            // Enhanced player drawing with gradient and glow
+            const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+            gradient.addColorStop(0, '#ffffff');
+            gradient.addColorStop(0.7, '#0ea5e9');
+            gradient.addColorStop(1, '#1e40af');
+            
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2, false);
-            ctx.fillStyle = this.color;
+            ctx.fillStyle = gradient;
             ctx.fill();
+            
+            // Add glow effect
+            ctx.shadowColor = '#0ea5e9';
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2, false);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            
             // Draw shield if invincible
             if (this.isInvincible) {
                 ctx.beginPath();
@@ -170,14 +223,37 @@ document.addEventListener('DOMContentLoaded', () => {
     class Projectile {
         constructor(x, y, radius, color, velocity) {
             this.x = x; this.y = y; this.radius = radius; this.color = color; this.velocity = velocity;
+            this.trail = [];
         }
         draw() {
+            // Draw trail
+            for (let i = 0; i < this.trail.length; i++) {
+                const point = this.trail[i];
+                const alpha = (i / this.trail.length) * 0.5;
+                ctx.globalAlpha = alpha;
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, this.radius * (i / this.trail.length), 0, Math.PI * 2, false);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+            
+            // Enhanced projectile with glow effect
+            ctx.shadowColor = this.color;
+            ctx.shadowBlur = 5;
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2, false);
             ctx.fillStyle = this.color;
             ctx.fill();
+            ctx.shadowBlur = 0;
         }
         update() {
+            // Update trail
+            this.trail.push({ x: this.x, y: this.y });
+            if (this.trail.length > 5) {
+                this.trail.shift();
+            }
+            
             this.draw();
             this.x += this.velocity.x;
             this.y += this.velocity.y;
@@ -264,6 +340,242 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    class PinkMonster {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.radius = 25; // Medium size
+            this.color = '#ff69b4'; // Pink color
+            this.speed = 3; // Fast speed to chase player
+            this.lifetime = 5000; // 5 seconds lifetime
+            this.startTime = Date.now();
+            this.isChasing = true;
+            this.explosionRadius = 60; // Explosion radius when it explodes
+            this.pulsePhase = 0;
+        }
+
+        draw() {
+            // Pulsing effect
+            this.pulsePhase += 0.15;
+            const pulse = Math.sin(this.pulsePhase) * 0.2 + 1;
+            const currentRadius = this.radius * pulse;
+            
+            // Draw pink monster with gradient
+            const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, currentRadius);
+            gradient.addColorStop(0, '#ffb6c1');
+            gradient.addColorStop(0.7, '#ff69b4');
+            gradient.addColorStop(1, '#ff1493');
+            
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, currentRadius, 0, Math.PI * 2, false);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            
+            // Add glow effect
+            ctx.shadowColor = '#ff69b4';
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, currentRadius, 0, Math.PI * 2, false);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            // Draw warning circle when about to explode
+            const timeLeft = this.lifetime - (Date.now() - this.startTime);
+            if (timeLeft < 1000) { // Last second
+                const warningAlpha = 0.5 + Math.sin(this.pulsePhase * 4) * 0.3;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.explosionRadius, 0, Math.PI * 2, false);
+                ctx.strokeStyle = `rgba(255, 20, 147, ${warningAlpha})`;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
+        }
+
+        update() {
+            this.draw();
+            
+            if (this.isChasing && player) {
+                // Chase the player
+                const dx = player.x - this.x;
+                const dy = player.y - this.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance > 0) {
+                    const moveX = (dx / distance) * this.speed;
+                    const moveY = (dy / distance) * this.speed;
+                    
+                    this.x += moveX;
+                    this.y += moveY;
+                }
+            }
+            
+            // Check if lifetime expired
+            const elapsed = Date.now() - this.startTime;
+            if (elapsed >= this.lifetime) {
+                this.explode();
+                return true; // Signal to remove from array
+            }
+            
+            return false;
+        }
+
+        explode() {
+            // Create explosion effect
+            for (let i = 0; i < 20; i++) {
+                const angle = (Math.PI * 2 * i) / 20;
+                const speed = 3 + Math.random() * 3;
+                particles.push(new Particle(
+                    this.x, this.y, 
+                    Math.random() * 3 + 2, 
+                    this.color, 
+                    { 
+                        x: Math.cos(angle) * speed, 
+                        y: Math.sin(angle) * speed 
+                    }
+                ));
+            }
+            
+            // Check if player is in explosion radius
+            if (player) {
+                const dist = Math.hypot(player.x - this.x, player.y - this.y);
+                if (dist < this.explosionRadius + player.radius) {
+                    // Player takes damage from explosion
+                    if (!player.isInvincible) {
+                        playerHealth--;
+                        updateHealthDisplay();
+                        
+                        // Create hit effect
+                        for (let i = 0; i < 15; i++) {
+                            particles.push(new Particle(player.x, player.y, Math.random() * 4, 'red', 
+                                { x: (Math.random() - 0.5) * 10, y: (Math.random() - 0.5) * 10 }));
+                        }
+                        
+                        if (playerHealth <= 0) {
+                            gameOver();
+                        }
+                    }
+                }
+            }
+        }
+
+        takeDamage(damage = 1) {
+            // Pink monster can be destroyed by projectiles
+            return true; // Always destroyed by one hit
+        }
+    }
+
+    class Boss {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.radius = 60; // Huge boss
+            this.maxHealth = 1000; // Super tanky
+            this.health = this.maxHealth;
+            this.speed = 2; // Slow but persistent
+            this.color = '#ff0000'; // Red boss
+            this.lastAttack = 0;
+            this.attackCooldown = 2000; // Attack every 2 seconds
+            this.rage = false; // Rage mode when low health
+        }
+
+        draw() {
+            // Boss body with gradient
+            const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+            gradient.addColorStop(0, '#ff4444');
+            gradient.addColorStop(0.7, '#cc0000');
+            gradient.addColorStop(1, '#880000');
+            
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2, false);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            
+            // Boss glow effect
+            ctx.shadowColor = '#ff0000';
+            ctx.shadowBlur = 20;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2, false);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            // Health bar
+            const barWidth = this.radius * 2;
+            const barHeight = 8;
+            const barX = this.x - barWidth / 2;
+            const barY = this.y - this.radius - 20;
+            
+            // Background
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillRect(barX, barY, barWidth, barHeight);
+            
+            // Health
+            const healthPercent = this.health / this.maxHealth;
+            ctx.fillStyle = healthPercent > 0.5 ? '#00ff00' : healthPercent > 0.25 ? '#ffff00' : '#ff0000';
+            ctx.fillRect(barX, barY, barWidth * healthPercent, barHeight);
+            
+            // Boss text
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('BOSS', this.x, this.y + 5);
+        }
+
+        update() {
+            this.draw();
+            
+            // Move towards player
+            const dx = player.x - this.x;
+            const dy = player.y - this.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance > 0) {
+                const moveX = (dx / distance) * this.speed;
+                const moveY = (dy / distance) * this.speed;
+                
+                this.x += moveX;
+                this.y += moveY;
+            }
+            
+            // Rage mode when low health
+            if (this.health < this.maxHealth * 0.3) {
+                this.rage = true;
+                this.speed = 4; // Faster when enraged
+                this.color = '#ff6600'; // Orange when enraged
+            }
+            
+            // Attack player if close enough
+            if (distance < this.radius + player.radius + 10) {
+                const currentTime = Date.now();
+                if (currentTime - this.lastAttack > this.attackCooldown) {
+                    this.attackPlayer();
+                    this.lastAttack = currentTime;
+                }
+            }
+        }
+
+        attackPlayer() {
+            if (!player.isInvincible) {
+                playerHealth--;
+                updateHealthDisplay();
+                
+                // Create hit effect
+                for (let i = 0; i < 15; i++) {
+                    particles.push(new Particle(player.x, player.y, Math.random() * 4, 'red', 
+                        { x: (Math.random() - 0.5) * 10, y: (Math.random() - 0.5) * 10 }));
+                }
+                
+                if (playerHealth <= 0) {
+                    gameOver();
+                }
+            }
+        }
+
+        takeDamage(damage) {
+            this.health -= damage;
+            return this.health <= 0;
+        }
+    }
+
 
     // --- SPAWNERS ---
     function updateHealthDisplay() {
@@ -321,18 +633,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 { emoji: '⭐', type: 'star' },
                 { emoji: '🌙', type: 'moon' },
                 { emoji: '🌕', type: 'redmoon' },
-                { emoji: '🛡️', type: 'shield', weight: 0.3 } // Reduced chance for shield
+                { emoji: '🛡️', type: 'shield', weight: 0.3 }, // Reduced chance for shield
+                { emoji: '❤️', type: 'heart', weight: 0.1 } // Very rare heart powerup
             ];
             
             // Weighted random selection
-            const totalWeight = 1 + 1 + 1 + 0.3; // star, moon, redmoon, shield
+            const totalWeight = 1 + 1 + 1 + 0.3 + 0.1; // star, moon, redmoon, shield, heart
             let random = Math.random() * totalWeight;
             let choice;
             
             if (random < 1) choice = powerUpTypes[0]; // star
             else if (random < 2) choice = powerUpTypes[1]; // moon  
             else if (random < 3) choice = powerUpTypes[2]; // redmoon
-            else choice = powerUpTypes[3]; // shield (reduced chance)
+            else if (random < 3.3) choice = powerUpTypes[3]; // shield (reduced chance)
+            else choice = powerUpTypes[4]; // heart (very rare)
             
             const x = Math.random() * canvas.width;
             const y = Math.random() * canvas.height;
@@ -348,6 +662,41 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('Spawning bomb at', x, y);
             bombs.push(new Bomb(x, y, 20));
         }, 15000); // Spawn every 15 seconds
+    }
+
+    function spawnPinkMonsters() {
+        setInterval(() => {
+            // 30% chance to spawn pink monster
+            if (Math.random() < 0.3) {
+                // Spawn at random edge
+                let x, y;
+                const edge = Math.random();
+                if (edge < 0.25) {
+                    x = -25;
+                    y = Math.random() * canvas.height;
+                } else if (edge < 0.5) {
+                    x = canvas.width + 25;
+                    y = Math.random() * canvas.height;
+                } else if (edge < 0.75) {
+                    x = Math.random() * canvas.width;
+                    y = -25;
+                } else {
+                    x = Math.random() * canvas.width;
+                    y = canvas.height + 25;
+                }
+                
+                console.log('Spawning pink monster at', x, y);
+                pinkMonsters.push(new PinkMonster(x, y));
+            }
+        }, 8000); // Check every 8 seconds
+    }
+
+    function spawnHeartAtScore() {
+        // Spawn heart every 25k points
+        const x = Math.random() * canvas.width;
+        const y = Math.random() * canvas.height;
+        console.log('Spawning heart at', x, y);
+        powerUps.push(new PowerUp(x, y, 15, '❤️', 'heart'));
     }
 
     function updateDifficulty() {
@@ -432,7 +781,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- GAME STATE ---
     function init() {
         player = new Player(canvas.width / 2, canvas.height / 2, 15, 'white');
-        projectiles = []; enemies = []; particles = []; powerUps = []; orbitingMoons = []; bombs = [];
+        projectiles = []; enemies = []; particles = []; powerUps = []; orbitingMoons = []; bombs = []; pinkMonsters = [];
+        boss = null; bossSpawned = false; // Reset boss
         score = 0; scoreEl.innerHTML = score;
         powerUpsStatusEl.innerHTML = '';
         gameOverModal.style.display = 'none';
@@ -489,6 +839,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     player.ricochetActive = false;
                     updatePowerUpUI('star', 0);
                 }, 30000);
+                break;
+            case 'heart':
+                // Heal player by 1 heart
+                if (playerHealth < 3) {
+                    playerHealth++;
+                    updateHealthDisplay();
+                    
+                    // Create healing effect
+                    for (let i = 0; i < 10; i++) {
+                        particles.push(new Particle(player.x, player.y, Math.random() * 3, 'red', 
+                            { x: (Math.random() - 0.5) * 6, y: (Math.random() - 0.5) * 6 }));
+                    }
+                    console.log('Player healed! Health:', playerHealth);
+                } else {
+                    console.log('Player already at full health');
+                }
                 break;
         }
     }
@@ -558,6 +924,43 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        // Update pink monsters
+        pinkMonsters.forEach((pinkMonster, index) => {
+            if (pinkMonster.update()) {
+                // Monster exploded, remove it
+                pinkMonsters.splice(index, 1);
+            }
+        });
+
+        // Update boss
+        if (boss) {
+            boss.update();
+            
+            // Boss collision with projectiles
+            projectiles.forEach((projectile, pIndex) => {
+                const dist = Math.hypot(projectile.x - boss.x, projectile.y - boss.y);
+                if (dist - projectile.radius - boss.radius < 1) {
+                    // Create explosion effect
+                    for (let i = 0; i < 15; i++) {
+                        particles.push(new Particle(boss.x, boss.y, Math.random() * 4, boss.color, 
+                            { x: (Math.random() - 0.5) * 8, y: (Math.random() - 0.5) * 8 }));
+                    }
+                    
+                    if (boss.takeDamage(player.damage)) {
+                        // Boss defeated!
+                        const points = 50000; // Huge bonus for defeating boss
+                        score += points;
+                        updateScore();
+                        boss = null;
+                        console.log('BOSS DEFEATED! +50,000 points!');
+                    }
+                    
+                    // Remove projectile
+                    projectiles.splice(pIndex, 1);
+                }
+            });
+        }
+
         // Update enemy count display
         updateEnemyCount();
 
@@ -615,10 +1018,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     for (let i = 0; i < Math.min(enemy.radius, 6); i++) {
                         particles.push(new Particle(enemy.x, enemy.y, Math.random() * 2, enemy.color, { x: (Math.random() - 0.5) * 3, y: (Math.random() - 0.5) * 3 }));
                     }
-                    if (enemy.takeDamage()) {
+                    if (enemy.takeDamage(player.damage)) {
                         const points = Math.ceil(enemy.radius) * 10 * scoreMultiplier;
                         score += points; 
-                        scoreEl.innerHTML = score;
+                        updateScore();
                         setTimeout(() => enemies.splice(eIndex, 1), 0);
                     }
                 }
@@ -633,7 +1036,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const targets = enemies
                             .filter((e, i) => i !== eIndex)
                             .sort((a, b) => Math.hypot(a.x - enemy.x, a.y - enemy.y) - Math.hypot(b.x - enemy.x, b.y - enemy.y))
-                            .slice(0, 3);
+                            .slice(0, 1);
                         
                         targets.forEach(target => {
                             const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
@@ -648,16 +1051,28 @@ document.addEventListener('DOMContentLoaded', () => {
                         particles.push(new Particle(projectile.x, projectile.y, Math.random() * 2, enemy.color, { x: (Math.random() - 0.5) * 4, y: (Math.random() - 0.5) * 4}));
                     }
 
-                    if (enemy.takeDamage()) {
+                    if (enemy.takeDamage(player.damage)) {
                         const points = Math.ceil(enemy.radius) * 20 * scoreMultiplier;
                         score += points; 
-                        scoreEl.innerHTML = score;
+                        updateScore();
                         setTimeout(() => {
                             enemies.splice(eIndex, 1);
-                            projectiles.splice(pIndex, 1);
+                            // Reduce pierce count and remove projectile if pierce is exhausted
+                            if (player.pierce > 0) {
+                                player.pierce--;
+                            }
+                            if (player.pierce <= 0) {
+                                projectiles.splice(pIndex, 1);
+                            }
                         }, 0);
                     } else {
-                        setTimeout(() => projectiles.splice(pIndex, 1), 0);
+                        // Reduce pierce count and remove projectile if pierce is exhausted
+                        if (player.pierce > 0) {
+                            player.pierce--;
+                        }
+                        if (player.pierce <= 0) {
+                            setTimeout(() => projectiles.splice(pIndex, 1), 0);
+                        }
                     }
                 }
             });
@@ -691,6 +1106,61 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         });
+
+        // Pink monster collision detection
+        pinkMonsters.forEach((pinkMonster, pmIndex) => {
+            // Player collision with pink monster
+            const distPlayer = Math.hypot(player.x - pinkMonster.x, player.y - pinkMonster.y);
+            const currentTime = Date.now();
+            if (distPlayer - pinkMonster.radius - player.radius < 1 && 
+                currentTime - lastHitTime > hitCooldown) {
+                playerHealth--;
+                lastHitTime = currentTime;
+                updateHealthDisplay();
+                
+                // Create hit effect
+                for (let i = 0; i < 10; i++) {
+                    particles.push(new Particle(player.x, player.y, Math.random() * 3, 'pink', 
+                        { x: (Math.random() - 0.5) * 8, y: (Math.random() - 0.5) * 8 }));
+                }
+                
+                // Remove pink monster after collision
+                pinkMonsters.splice(pmIndex, 1);
+                
+                if (playerHealth <= 0) {
+                    cancelAnimationFrame(animationId);
+                    clearInterval(enemyInterval);
+                    clearInterval(powerUpInterval);
+                    clearInterval(bombInterval);
+                    currentScore = score;
+                    finalScore.textContent = score;
+                    gameOverModal.style.display = 'flex';
+                }
+            }
+        });
+
+        // Pink monster collision with projectiles
+        pinkMonsters.forEach((pinkMonster, pmIndex) => {
+            projectiles.forEach((projectile, pIndex) => {
+                const dist = Math.hypot(projectile.x - pinkMonster.x, projectile.y - pinkMonster.y);
+                if (dist - projectile.radius - pinkMonster.radius < 1) {
+                    // Create explosion effect
+                    for (let i = 0; i < 10; i++) {
+                        particles.push(new Particle(pinkMonster.x, pinkMonster.y, Math.random() * 3, pinkMonster.color, 
+                            { x: (Math.random() - 0.5) * 6, y: (Math.random() - 0.5) * 6 }));
+                    }
+                    
+                    // Pink monster destroyed
+                    const points = 100; // Points for destroying pink monster
+                    score += points;
+                    updateScore();
+                    
+                    // Remove both projectile and pink monster
+                    projectiles.splice(pIndex, 1);
+                    pinkMonsters.splice(pmIndex, 1);
+                }
+            });
+        });
     }
 
     // --- EVENT LISTENERS ---
@@ -702,8 +1172,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const speed = 7;
         const velocity = { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed };
         
-        // Normal shot
-        projectiles.push(new Projectile(player.x, player.y, 5, 'white', velocity));
+        // Normal shot with upgraded stats
+        projectiles.push(new Projectile(player.x, player.y, player.projectileSize, 'white', velocity));
         
         // Double shot if redmoon active
         if (player.doubleShot) {
@@ -716,8 +1186,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 x: Math.cos(angle - offsetAngle) * speed, 
                 y: Math.sin(angle - offsetAngle) * speed 
             };
-            projectiles.push(new Projectile(player.x, player.y, 5, 'red', velocity1));
-            projectiles.push(new Projectile(player.x, player.y, 5, 'red', velocity2));
+            projectiles.push(new Projectile(player.x, player.y, player.projectileSize, 'red', velocity1));
+            projectiles.push(new Projectile(player.x, player.y, player.projectileSize, 'red', velocity2));
         }
     });
 
@@ -741,6 +1211,7 @@ document.addEventListener('DOMContentLoaded', () => {
         spawnEnemies();
         spawnPowerUps();
         spawnBombs();
+        spawnPinkMonsters();
     });
 
     // Help modal event listeners
@@ -822,7 +1293,79 @@ document.addEventListener('DOMContentLoaded', () => {
         spawnEnemies();
         spawnPowerUps();
         spawnBombs();
+        spawnPinkMonsters();
     }
+    
+    // Upgrade system functions
+    function updateScore() {
+        scoreEl.textContent = score;
+        
+        // Check for upgrade opportunity
+        if (score >= lastUpgradeScore + UPGRADE_INTERVAL) {
+            showUpgradeModal();
+            lastUpgradeScore = score;
+        }
+        
+        // Spawn heart every 25k points
+        if (score > 0 && score % 25000 === 0) {
+            spawnHeartAtScore();
+        }
+        
+        // Spawn boss at 100,000 points
+        if (score >= 100000 && !bossSpawned) {
+            spawnBoss();
+            bossSpawned = true;
+        }
+    }
+    
+    function spawnBoss() {
+        // Spawn boss at random edge
+        const edges = [
+            { x: -60, y: Math.random() * canvas.height },
+            { x: canvas.width + 60, y: Math.random() * canvas.height },
+            { x: Math.random() * canvas.width, y: -60 },
+            { x: Math.random() * canvas.width, y: canvas.height + 60 }
+        ];
+        const spawnPoint = edges[Math.floor(Math.random() * edges.length)];
+        
+        boss = new Boss(spawnPoint.x, spawnPoint.y);
+        console.log('BOSS SPAWNED!');
+    }
+    
+    function showUpgradeModal() {
+        upgradeModal.style.display = 'flex';
+        // Pause the game
+        cancelAnimationFrame(animationId);
+    }
+    
+    function hideUpgradeModal() {
+        upgradeModal.style.display = 'none';
+        // Resume the game
+        animate();
+    }
+    
+    function applyUpgrade(upgradeType) {
+        switch(upgradeType) {
+            case 'damage':
+                player.damage *= 2;
+                console.log('Damage upgraded to:', player.damage);
+                break;
+            case 'pierce':
+                player.pierce += 1;
+                console.log('Pierce upgraded to:', player.pierce);
+                break;
+            case 'size':
+                player.projectileSize *= 1.5;
+                console.log('Projectile size upgraded to:', player.projectileSize);
+                break;
+        }
+        hideUpgradeModal();
+    }
+    
+    // Upgrade button event listeners
+    upgradeDamageButton.addEventListener('click', () => applyUpgrade('damage'));
+    upgradePierceButton.addEventListener('click', () => applyUpgrade('pierce'));
+    upgradeSizeButton.addEventListener('click', () => applyUpgrade('size'));
 
     // Save score button
     saveScoreButton.addEventListener('click', () => {
@@ -849,4 +1392,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Show name input modal on page load
     nameInputModal.style.display = 'flex';
     playerNameInput.focus();
+
+    // Game over function
+    function gameOver() {
+        cancelAnimationFrame(animationId);
+        clearInterval(enemyInterval);
+        clearInterval(powerUpInterval);
+        clearInterval(bombInterval);
+        currentScore = score;
+        finalScore.textContent = score;
+        gameOverModal.style.display = 'flex';
+    }
 });
